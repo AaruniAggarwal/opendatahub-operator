@@ -66,7 +66,7 @@ CRD_REF_DOCS ?= $(LOCALBIN)/crd-ref-docs
 YQ ?= $(LOCALBIN)/yq
 ## Tool Versions
 KUSTOMIZE_VERSION ?= v5.0.2
-CONTROLLER_GEN_VERSION ?= v0.9.2
+CONTROLLER_GEN_VERSION ?= v0.14.0
 OPERATOR_SDK_VERSION ?= v1.31.0
 GOLANGCI_LINT_VERSION ?= v1.59.1
 YQ_VERSION ?= v4.12.2
@@ -103,6 +103,16 @@ IMAGE_BUILD_FLAGS ?= --build-arg USE_LOCAL=false
 OPERATOR_MAKE_ENV_FILE = local.mk
 -include $(OPERATOR_MAKE_ENV_FILE)
 
+# Buildx function for building multi-arch image
+define func_buildx
+	# copy existing Dockerfile and insert --platform=${BUILDPLATFORM} into Dockerfile.cross, and preserve the original Dockerfile
+	sed -e '1 s/\(^FROM\)/FROM --platform=\$$\{BUILDPLATFORM\}/; t' -e ' 1,// s//FROM --platform=\$$\{BUILDPLATFORM\}/' $1 > Dockerfile.cross
+	- docker buildx create --name project-v3-builder
+	docker buildx use project-v3-builder
+	- docker buildx build --push --platform=$2 --tag $3 -f Dockerfile.cross .
+	- docker buildx rm project-v3-builder
+	rm Dockerfile.cross
+endef
 
 .PHONY: default
 default: manifests generate lint unit-test build
@@ -191,6 +201,12 @@ image-build: # unit-test ## Build image with the manager.
 .PHONY: image-push
 image-push: ## Push image with the manager.
 	$(IMAGE_BUILDER) push $(IMG)
+
+PLATFORMS ?= linux/amd64,linux/s390x,linux/ppc64le
+.PHONY: docker-buildx
+docker-buildx: ## Build and push docker image for the manager for cross-platform support
+	$(call func_buildx,./Dockerfiles/Dockerfile,$(PLATFORMS),$(IMG))
+
 
 .PHONY: image
 image: image-build image-push ## Build and push image with the manager.
@@ -282,6 +298,12 @@ bundle: prepare operator-sdk ## Generate bundle manifests and metadata, then val
 .PHONY: bundle-build
 bundle-build: bundle
 	$(IMAGE_BUILDER) build --no-cache -f Dockerfiles/bundle.Dockerfile -t $(BUNDLE_IMG) .
+# Bundle-Build multi-arch image
+
+.PHONY: bundle-docker-buildx
+bundle-docker-buildx: ## Build and push docker image for the manager for cross-platform support
+	$(call func_buildx,./Dockerfiles/bundle.Dockerfile,$(PLATFORMS),$(BUNDLE_IMG))
+
 
 .PHONY: bundle-push
 bundle-push: ## Push the bundle image.
